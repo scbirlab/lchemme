@@ -3,6 +3,7 @@ from carabiner import print_err
 from datasets import Dataset
 from schemist.tables import converter
 from transformers import pipeline
+from transformers.pipelines.pt_utils import KeyDataset
 
 import torch
 
