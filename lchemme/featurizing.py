@@ -295,46 +295,6 @@ def _embedding_routine(df: Union[str, Iterable[str], DataFrame],
     return embedding_columns, embeddings
 
 
-def embed_smiles(
-    df: Union[str, Iterable[str], DataFrame], 
-    tokenizer, #: Union[str, PreTrainedTokenizerBase], 
-    model,#: Union[str, PreTrainedModel], 
-    column: Optional[str] = None, 
-    method: Union[str, Iterable[str]] = 'mean', 
-    batch_size: int = 128,
-    plot: Optional[str] = None,
-    additional_columns: Optional[Union[str, Iterable[str]]] = None
-) -> Union[DataFrame, Dict[str, DataFrame]]:
-
-    """
-    
-    """
-
-    embedding_columns, embeddings = _embedding_routine(
-        df=df, 
-        column=column, 
-        tokenizer=tokenizer, 
-        model=model, 
-        method=method, 
-        batch_size=batch_size,
-        plot=plot,
-        additional_columns=additional_columns,
-    )
-
-    results = {
-        name: DataFrame(
-            embeddings[name], 
-            index=smiles_values,
-            columns=[f"{name}_{i}" for i in range(len(embeddings[name]))],
-        ) 
-    for name in names}
-    
-    if len(method) == 1:
-        return results[names[0]]
-    else:
-        return results
-
-
 def _flatten_embedding(
     embedding: Mapping[str, Iterable], 
     embedding_columns: Iterable[str]
