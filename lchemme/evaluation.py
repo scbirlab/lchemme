@@ -1,7 +1,10 @@
 
+from carabiner import print_err
+from datasets import Dataset
 from schemist.tables import converter
 from transformers import pipeline
 
+import torch
 
 def get_model_smiles(df, column, pipe, batch_size=128):
 
@@ -11,13 +14,16 @@ def get_model_smiles(df, column, pipe, batch_size=128):
     return [item['translation_text'] for d in results for item in d]
 
 
-def check_canonicalization_performance(df, column, batch_size=128, sample_size=10_000):
-    
+def check_canonicalization_performance(
+    df, column, batch_size=128, sample_size=10_000,
+    model_id: str
+):
+    # TODO: Make this actually functional
     canonicalizer = pipeline("translation", 
-                             model=LLM_PATH, #llm_model, 
+                             model=model_id, #llm_model, 
                              # tokenizer=tokenizer,
                              max_length=500,
-                             device='cuda')
+                             device='cuda' if torch.cuda.is_available() else 'cpu')
 
     if df.shape[0] > sample_size:
         df = df.sample(min(df.shape[0], sample_size))
@@ -32,13 +38,13 @@ def check_canonicalization_performance(df, column, batch_size=128, sample_size=1
     )
     
     errors, df = converter(df, column, 
-                           output_representation=['permuted_smiles', 'inchikey'])
+                           output_representation=['smiles', 'permuted_smiles', 'inchikey'])
     errors, df = converter(df, 'model_smiles', 
                            output_representation='inchikey',
                            prefix='model_')
     print_err(errors)
     
-    df = df.assign(model_correct_canonical_smiles=lambda x: x[canon_col] == x['model_smiles'],
+    df = df.assign(model_correct_canonical_smiles=lambda x: x['smiles'] == x['model_smiles'],
                    model_correct_molecule=lambda x: x['model_inchikey'] == x['inchikey'])
     mean_correct_mol = df["model_correct_molecule"].mean()
     mean_correct_smiles = df["model_correct_canonical_smiles"].mean()
