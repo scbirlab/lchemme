@@ -22,9 +22,14 @@ def check_canonicalization_performance(df, column, batch_size=128, sample_size=1
     if df.shape[0] > sample_size:
         df = df.sample(min(df.shape[0], sample_size))
 
-    df = df.assign(model_smiles=lambda x: get_model_smiles(x, column, 
-                                                           pipe=canonicalizer, 
-                                                           batch_size=batch_size)))
+    df = df.assign(
+        model_smiles=lambda x: get_model_smiles(
+            x, 
+            column, 
+            pipe=canonicalizer, 
+            batch_size=batch_size,
+        )
+    )
     
     errors, df = converter(df, column, 
                            output_representation=['permuted_smiles', 'inchikey'])
