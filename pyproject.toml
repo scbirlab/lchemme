@@ -1,0 +1,69 @@
+[project]
+name = "lchemme"
+version = "0.0.1"
+authors = [
+  { name="Eachan Johnson", email="eachan.johnson@crick.ac.uk" },
+]
+description = "Training and applying large chemistry models for embeddings."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { file = "LICENSE" }
+keywords = [
+  "science", 
+  "chemistry", 
+  "machine learning", 
+  "analysis", 
+  "cheminformatics", 
+  "large language models",
+  "ai",
+]
+
+classifiers = [  
+  
+  "Development Status :: 3 - Alpha",
+
+  # Indicate who your project is intended for
+  "Intended Audience :: Science/Research",
+  "Topic :: Scientific/Engineering :: Chemistry",
+
+  "License :: OSI Approved :: MIT License",
+
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3 :: Only",
+]
+
+dependencies = [ 
+  "carabiner-tools[pd,mpl]>=0.0.4",
+  "datasets<=3.1.0",
+  "openpyxl==3.1.0", 
+  "pandas",
+  "schemist>=0.0.4.post1",
+  "tensorboard",
+  "tokenizers",
+  "torch>=2.3",
+  "torchvision",
+  "transformers[torch]",
+  "umap-learn",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/scbirlab/lchemme"
+"Bug Tracker" = "https://github.com/scbirlab/lchemme/issues"
+
+[project.scripts]  # Optional
+lchemme = "lchemme.cli:main"
+
+[tool.setuptools]
+# If there are data files included in your packages that need to be
+# installed, specify them here.
+# package-data = {"" = ["*.yml"]}
+
+[build-system]
+# These are the assumed default build requirements from pip:
+# https://pip.pypa.io/en/stable/reference/pip/#pep-517-and-518-support
+requires = ["setuptools>=43.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
