@@ -37,9 +37,6 @@ def check_canonicalization_performance(df, column, batch_size=128, sample_size=1
                            output_representation='inchikey',
                            prefix='model_')
     print_err(errors)
-    errors, df = converter(df, column, 
-                           output_representation=)
-    print_err(errors)
     
     df = df.assign(model_correct_canonical_smiles=lambda x: x[canon_col] == x['model_smiles'],
                    model_correct_molecule=lambda x: x['model_inchikey'] == x['inchikey'])
