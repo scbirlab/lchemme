@@ -15,8 +15,11 @@ def get_model_smiles(df, column, pipe, batch_size=128):
 
 
 def check_canonicalization_performance(
-    df, column, batch_size=128, sample_size=10_000,
-    model_id: str
+    df, 
+    column,
+    model_id: str,
+    batch_size: int = 128, 
+    sample_size: int = 10_000
 ):
     # TODO: Make this actually functional
     canonicalizer = pipeline("translation", 
