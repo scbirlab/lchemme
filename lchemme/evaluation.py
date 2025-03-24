@@ -20,7 +20,7 @@ def check_canonicalization_performance(df, column, batch_size=128, sample_size=1
                              device='cuda')
 
     if df.shape[0] > sample_size:
-        df = df.sample(min(df.shape[0], sample_size)
+        df = df.sample(min(df.shape[0], sample_size))
 
     df = df.assign(model_smiles=lambda x: get_model_smiles(x, column, 
                                                            pipe=canonicalizer, 
