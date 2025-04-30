@@ -304,7 +304,7 @@ def pretrain(
     print_err(f"Each epoch has {steps_per_epoch} steps, with the entire training taking {max_training_steps} steps")
 
     ncpus = max(4, multiprocessing.cpu_count() - 1)  # TODO: This doesn't seem to work well on Crick Slurm cluster
-    tokenizer = _load_tokenizer(tokenizer, checkpoint)  # reload to stop warnings about forking
+    
     eval_steps = min(10_000, steps_per_epoch) if ds_test is not None else None
     save_steps = (50 * eval_steps) if ds_test is not None else min(50_000, steps_per_epoch)
     training_args = Seq2SeqTrainingArguments(
@@ -334,6 +334,7 @@ def pretrain(
         dataloader_num_workers=ncpus,
     )
 
+    tokenizer = _load_tokenizer(tokenizer, checkpoint)  # reload to stop warnings about forking
     data_collator = DataCollatorForSeq2Seq(
         tokenizer=tokenizer, 
         padding=True,
@@ -347,7 +348,8 @@ def pretrain(
             )
         except Exception:
             pass
-
+    
+    tokenizer = _load_tokenizer(tokenizer, checkpoint)  # reload to stop warnings about forking
     trainer = Seq2SeqTrainer(
         model=model,
         args=training_args,
