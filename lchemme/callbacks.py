@@ -73,13 +73,13 @@ class SaveDatasetStateCallback(TrainerCallback):
 
     """
     # TODO: Wait for sateful dataloader support https://github.com/huggingface/transformers/pull/34205
-    def __init__(self, filename, dataset_attr: str = "train_dataset", *args, **kwargs):
+    def __init__(self, trainer, dataset_attr: str = "train_dataset", *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.filename = filename
+        self.trainer = trainer
         self.dataset_attr = dataset_attr
 
     def on_save(self, args, state, control, **kwargs):
-        ds = getattr(kwargs["trainer"], self.dataset_attr)
+        ds = self.trainer.train_dataset
         torch.save(
             ds.state_dict(),
             os.path.join(args.output_dir, f"dataset_state_{state.global_step}.pt")
@@ -93,5 +93,5 @@ class SaveDatasetStateCallback(TrainerCallback):
                 (p for p in glob(os.path.join(ckpt_dir, "dataset_state_*.pt"))),
                 key=lambda p: int(p.stem.split("_")[-1])
             )
-            ds = getattr(kwargs["trainer"], self.dataset_attr)
+            ds = self.trainer.train_dataset
             ds.load_state_dict(torch.load(latest))

@@ -3,12 +3,12 @@
 set -e
 set -x
 
-TRAIN_DATA="scbirlab/fang-2023-biogen-adme@scaffold-split:train"
-TEST_DATA="scbirlab/fang-2023-biogen-adme@scaffold-split:test"
+TRAIN_DATA="hf://scbirlab/fang-2023-biogen-adme@scaffold-split:train"
+TEST_DATA="hf://scbirlab/fang-2023-biogen-adme@scaffold-split:test"
 COLUMN=smiles
-MODEL="sshleifer/bart-tiny-random"
+MODEL="facebook/bart-base"
 OUTPUT_DIR="test/outputs"
-EPOCHS=.2
+EPOCHS=.05
 
 lchemme tokenize $TRAIN_DATA \
     --column smiles \
@@ -19,7 +19,7 @@ lchemme pretrain $TRAIN_DATA \
     --column $COLUMN \
     --test $TEST_DATA \
     --model $MODEL \
-    --tokenizer OUTPUT_DIR/tokenizer \
+    --tokenizer $OUTPUT_DIR/tokenizer \
     --epochs $EPOCHS \
     --output $OUTPUT_DIR/model \
     --plot $OUTPUT_DIR/training-log
@@ -27,7 +27,7 @@ lchemme pretrain $TRAIN_DATA \
 lchemme pretrain $TRAIN_DATA \
     --column $COLUMN \
     --test $TEST_DATA \
-    --model $MODEL/model \
+    --model $OUTPUT_DIR/model \
     --resume \
     --epochs $EPOCHS \
     --output $OUTPUT_DIR/model \
@@ -38,4 +38,5 @@ lchemme featurize $TEST_DATA \
     --batch-size 64 \
     --method max mean median start sum var \
     --model $OUTPUT_DIR/model \
-    --plot $OUTPUT_DIR/umap
+    --plot $OUTPUT_DIR/umap \
+> $OUTPUT_DIR/featurized.csv

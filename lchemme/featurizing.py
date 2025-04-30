@@ -311,15 +311,14 @@ def _embedding_routine(df: Union[str, Iterable[str], DataFrame],
     for item in ds.iter(batch_size=batch_size):
         smiles_values += item[column]
 
-    embedder = partial(
-        _embed_smiles, 
-        column=column, 
-        tokenizer=tokenizer,
-        model=model, 
-        method=method,
-    )
     embeddings = ds.map(
-        embedder, 
+        _embed_smiles, 
+        fn_kwargs={
+            "column": column, 
+            "tokenizer": tokenizer,
+            "model": model, 
+            "method": method,
+        }
         batched=True, 
         batch_size=batch_size, 
         desc="Calculating embedding",
@@ -383,13 +382,13 @@ def embed_smiles_files(
         additional_columns=additional_columns,
     )
 
-    flattener = partial(_flatten_embedding, 
-                        embedding_columns=embedding_columns)
-
     embeddings = (
         embeddings#.to_iterable_dataset()
         .map(
-            flattener,
+            _flatten_embedding,
+            fn_kwargs={
+                "embedding_columns": embedding_columns,
+            },
             remove_columns=embedding_columns,
             batched=True, 
             batch_size=batch_size,

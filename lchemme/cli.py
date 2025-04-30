@@ -206,14 +206,24 @@ def main() -> None:
             resume,
             ],
         )
-    featurize = CLICommand('featurize', 
-                           description='Get vector embeddings of a chemical dataset using a pre-trained large language model.',
-                           main=_featurize,
-                           options=[inputs, output_stream, column, feature_method, checkpoint, tokenizer_,
-                                    batch_size, plot_, extras])
+    featurize = CLICommand(
+        'featurize', 
+        description='Get vector embeddings of a chemical dataset using a pre-trained large language model.',
+        main=_featurize,
+        options=[
+            inputs, 
+            output_stream, 
+            column, 
+            feature_method, 
+            checkpoint, 
+            tokenizer_,
+            batch_size, 
+            plot_, 
+            extras,
+        ])
 
     app = CLIApp(
-        "lchemmy",
+        "lchemme",
         version=__version__,
         description="Training and applying large chemistry models.",
         commands=[tokenize, pretrain, featurize],

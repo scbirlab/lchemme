@@ -88,16 +88,22 @@ def tokenize(df: Union[str, DataFrame],
     slow_tokenizer.post_processor = processors.BertProcessing(**post_process_args)
     slow_tokenizer.decoder = _decoder()
 
-    trainer = _trainer(vocab_size=vocab_size, 
-                       special_tokens=special_tokens,
-                       show_progress=True)
+    trainer = _trainer(
+        vocab_size=vocab_size, 
+        special_tokens=special_tokens,
+        show_progress=True,
+    )
     print_err(f"Training tokenizer with vocab size {vocab_size}")
-    slow_tokenizer.train_from_iterator(_get_training_corpus(ds, column), 
-                                       trainer=trainer,
-                                       length=n_rows)
+    slow_tokenizer.train_from_iterator(
+        _get_training_corpus(ds, column), 
+        trainer=trainer,
+        length=n_rows,
+    )
 
-    fast_tokenizer = PreTrainedTokenizerFast(tokenizer_object=slow_tokenizer,
-                                             **tokenizer_structure.special_tokens_map)
+    fast_tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=slow_tokenizer,
+        **tokenizer_structure.special_tokens_map,
+    )
 
     if filename is not None:
         print_err(f"Saving pretrained tokenizer as {filename}")

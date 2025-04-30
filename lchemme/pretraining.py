@@ -64,8 +64,12 @@ def _load_train_test(
     return ds_train, ds_test
 
 
-def _load_tokenizer(tokenizer: Optional[Union[PreTrainedTokenizerFast, str]] = None,
-                    checkpoint: Optional[str] = None) -> PreTrainedTokenizerFast:
+def _load_tokenizer(
+    tokenizer: Optional[Union[PreTrainedTokenizerFast, str]] = None,
+    checkpoint: Optional[str] = None
+) -> PreTrainedTokenizerFast:
+    
+    from transformers import AutoTokenizer, PreTrainedTokenizerFast
 
     if tokenizer is None:
         print_err(f"Loading tokenizer from {checkpoint}")
@@ -217,6 +221,9 @@ def pretrain(
     # torch.set_float32_matmul_precision('high')
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
+    from torch._dynamo import config as dynamo_config
+    dynamo_config.suppress_errors = True
+    dynamo_config.capture_scalar_outputs = True
     from transformers import (
         AutoConfig, 
         AutoModelForSeq2SeqLM,
@@ -254,13 +261,7 @@ def pretrain(
         ds_test = (
             ds_test
                 .filter(lambda x: x[column] is not None and x[column] != "")
-                .to_iterable_dataset(
-                    num_shards=256,
-                )
-                .shuffle(
-                    seed=seed, 
-                    buffer_size=256,
-                )
+                .shuffle(seed=seed)
                 .map(
                     permutation_function, 
                     batched=True, 
@@ -269,14 +270,12 @@ def pretrain(
         )
     print_err(f"Dataset contains {dataset_token_number(ds_train, tokenizer, nrows=n_training_rows)} tokens")
 
-    token_ids = _get_token_ids(tokenizer)
-
     if reinitialize_before_training:
         print_err(f"Loading model architecture from {checkpoint} with vocab size {tokenizer.vocab_size}")
         config = AutoConfig.from_pretrained(
             checkpoint,
             vocab_size=tokenizer.vocab_size,
-            **token_ids,
+            **_get_token_ids(tokenizer),
         )
         model = AutoModelForSeq2SeqLM.from_config(config=config)
     else:
@@ -304,14 +303,14 @@ def pretrain(
     max_training_steps = ceil(n_epochs * n_training_rows / batch_size)
     print_err(f"Each epoch has {steps_per_epoch} steps, with the entire training taking {max_training_steps} steps")
 
-    ncpus = multiprocessing.count_cpus() - 1  # TODO: This doesn't seem to work well on Crick Slurm cluster
+    ncpus = max(4, multiprocessing.cpu_count() - 1)  # TODO: This doesn't seem to work well on Crick Slurm cluster
 
     eval_steps = min(10_000, steps_per_epoch) if ds_test is not None else None
     save_steps = (50 * eval_steps) if ds_test is not None else min(50_000, steps_per_epoch)
     training_args = Seq2SeqTrainingArguments(
         torch_compile=not no_compile,
         torch_compile_mode="max-autotune" if not no_compile else None,
-        tf32=True,
+        tf32=torch.cuda.is_available(),
         # bf16=True,
         # optim="adamw_bnb_8bit", 
         output_dir=output,
@@ -330,8 +329,9 @@ def pretrain(
         report_to=["tensorboard"],
         log_level="error",
         logging_dir=os.path.join(output, "logs"),
-        evaluation_strategy="steps" if ds_test is not None else "no",
+        eval_strategy="steps" if ds_test is not None else "no",
         eval_steps=eval_steps,
+        eval_on_start=True,
         load_best_model_at_end=ds_test is not None,
         dataloader_num_workers=ncpus,
     )
@@ -341,14 +341,6 @@ def pretrain(
         padding=True,
     )
 
-    callbacks = [SaveDatasetStateCallback()]
-    if ds_test is not None and early_stopping is not None:
-        print_err(f"Setting early stopping patience to {early_stopping} evaluation steps")
-        callbacks.append(EarlyStoppingCallback(early_stopping_patience=early_stopping))
-    if plot_filename is not None:
-        print_err("No early stopping.")
-        callbacks.append(PlotterCallback(plot_filename))
-
     trainer = Seq2SeqTrainer(
         model=model,
         args=training_args,
@@ -356,8 +348,16 @@ def pretrain(
         eval_dataset=ds_test,
         tokenizer=tokenizer,
         data_collator=data_collator,
-        callbacks=callbacks,
     )
+    trainer.add_callback(SaveDatasetStateCallback(trainer))
+    if ds_test is not None and early_stopping is not None:
+        print_err(f"Setting early stopping patience to {early_stopping} evaluation steps")
+        trainer.add_callback(
+            EarlyStoppingCallback(early_stopping_patience=early_stopping)
+        )
+    if plot_filename is not None:
+        print_err("No early stopping.")
+        trainer.add_callback(PlotterCallback(plot_filename))
 
     trainer.train()
     trainer.save_model(output)
