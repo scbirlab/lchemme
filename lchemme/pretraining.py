@@ -304,7 +304,7 @@ def pretrain(
     print_err(f"Each epoch has {steps_per_epoch} steps, with the entire training taking {max_training_steps} steps")
 
     ncpus = max(4, multiprocessing.cpu_count() - 1)  # TODO: This doesn't seem to work well on Crick Slurm cluster
-
+    tokenizer = _load_tokenizer(tokenizer, checkpoint)  # reload to stop warnings about forking
     eval_steps = min(10_000, steps_per_epoch) if ds_test is not None else None
     save_steps = (50 * eval_steps) if ds_test is not None else min(50_000, steps_per_epoch)
     training_args = Seq2SeqTrainingArguments(
@@ -314,7 +314,7 @@ def pretrain(
         # bf16=True,
         # optim="adamw_bnb_8bit", 
         output_dir=output,
-        resume_from_checkpoint=output if resume_training else None,
+        resume_from_checkpoint=checkpoint if resume_training else None,
         save_strategy="steps",
         save_steps=save_steps,
         overwrite_output_dir=True,
@@ -346,7 +346,7 @@ def pretrain(
         args=training_args,
         train_dataset=ds_train,
         eval_dataset=ds_test,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         data_collator=data_collator,
     )
     trainer.add_callback(SaveDatasetStateCallback(trainer))
