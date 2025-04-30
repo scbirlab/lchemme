@@ -3,8 +3,8 @@
 set -e
 set -x
 
-TRAIN_DATA="hf://scbirlab/fang-2023-biogen-adme@scaffold-split:train"
-TEST_DATA="hf://scbirlab/fang-2023-biogen-adme@scaffold-split:test"
+TRAIN_DATA="scbirlab/fang-2023-biogen-adme@scaffold-split:train"
+TEST_DATA="scbirlab/fang-2023-biogen-adme@scaffold-split:test"
 COLUMN=smiles
 MODEL="sshleifer/bart-tiny-random"
 OUTPUT_DIR="test/outputs"
