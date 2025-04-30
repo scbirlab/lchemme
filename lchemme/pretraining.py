@@ -349,7 +349,7 @@ def pretrain(
         except Exception:
             pass
     
-    tokenizer = _load_tokenizer(tokenizer, checkpoint)  # reload to stop warnings about forking
+    # tokenizer = _load_tokenizer(tokenizer, checkpoint)  # reload to stop warnings about forking
     trainer = Seq2SeqTrainer(
         model=model,
         args=training_args,
