@@ -89,9 +89,18 @@ class SaveDatasetStateCallback(TrainerCallback):
     def on_load(self, args, state, **kwargs):
         if args.resume_from_checkpoint is not None:
             ckpt_dir = args.resume_from_checkpoint
-            latest = max(
-                (p for p in glob(os.path.join(ckpt_dir, "dataset_state_*.pt"))),
-                key=lambda p: int(p.stem.split("_")[-1])
-            )
-            ds = self.trainer.train_dataset
-            ds.load_state_dict(torch.load(latest))
+            dataset_checkpoints = glob(os.path.join(ckpt_dir, "dataset_state_*.pt"))
+            if len(dataset_checkpoints) > 0:
+                latest = max(
+                    (
+                        p for p in glob(os.path.join(
+                            args.resume_from_checkpoint, 
+                            "dataset_state_*.pt"
+                        ))
+                    ),
+                    key=lambda p: int(p.stem.split("_")[-1])
+                )
+                ds = self.trainer.train_dataset
+                ds.load_state_dict(torch.load(latest))
+            else:
+                print_err(f"WARNING: Could not load dataset state from '{ckpt_dir}'")

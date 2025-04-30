@@ -11,10 +11,9 @@ import sys
 from carabiner import pprint_dict, upper_and_lower
 from carabiner.cliutils import clicommand, CLIOption, CLICommand, CLIApp
 
+from . import __version__
 from .tokenizing import _MODELS, tokenize
 from .featurizing import _FEATURE_METHODS
-
-__version__ = '0.0.1'
 
 
 @clicommand(message="Tokenizing with the following parameters")
