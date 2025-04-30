@@ -308,8 +308,6 @@ def pretrain(
     eval_steps = min(10_000, steps_per_epoch) if ds_test is not None else None
     save_steps = (50 * eval_steps) if ds_test is not None else min(50_000, steps_per_epoch)
     training_args = Seq2SeqTrainingArguments(
-        torch_compile=not no_compile,
-        torch_compile_mode="max-autotune" if not no_compile else None,
         tf32=torch.cuda.is_available(),
         # bf16=True,
         # optim="adamw_bnb_8bit", 
@@ -340,6 +338,15 @@ def pretrain(
         tokenizer=tokenizer, 
         padding=True,
     )
+
+    if not no_compile:
+        try:
+            model = torch.compile(
+                model,
+                mode="max-autotune",
+            )
+        except Exception:
+            pass
 
     trainer = Seq2SeqTrainer(
         model=model,
