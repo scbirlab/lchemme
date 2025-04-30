@@ -88,21 +88,24 @@ def _pretrain(args: Namespace) -> None:
     except (TypeError, ValueError):
         test = args.test
     
-    model = pretrain(args.input,
-                     column=args.column,
-                     checkpoint=args.model,
-                     output=args.output,
-                     tokenizer=args.tokenizer,
-                     reinitialize_before_training=not args.resume,
-                     test=test, 
-                     batch_size=args.batch_size,
-                     n_epochs=args.epochs,
-                     early_stopping=args.early_stopping,
-                     max_time=args.max_time,
-                     plot_filename=args.plot,
-                     max_learning_rate=1e-4,
-                     warmup_steps=10_000,
-                     weight_decay=.01)
+    model = pretrain(
+        args.input,
+        column=args.column,
+        checkpoint=args.model,
+        output=args.output,
+        tokenizer=args.tokenizer,
+        reinitialize_before_training=not args.resume,
+        resume_training=args.resume,
+        test=test, 
+        batch_size=args.batch_size,
+        n_epochs=args.epochs,
+        early_stopping=args.early_stopping,
+        max_time=args.max_time,
+        plot_filename=args.plot,
+        max_learning_rate=1e-4,
+        warmup_steps=10_000,
+        weight_decay=.01,
+    )
 
     return None
 

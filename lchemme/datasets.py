@@ -27,10 +27,27 @@ def _prepare_data(x: Mapping[str, Iterable[str]],
     return inputs
 
 
-def _random_smiles(column: str,
-                   tokenizer: PreTrainedTokenizerFast,
-                   permuted_column: Optional[str] = None,
-                   unknown_token: str = '<unk>'):
+def _random_smiles(
+    column: str,
+    tokenizer: PreTrainedTokenizerFast,
+    permuted_column: Optional[str] = None,
+    unknown_token: str = '<unk>'
+):
+    """Generate canonical and permuted SMILES.
+
+    Examples
+    ========
+    >>> from transformers import AutoTokenizer
+    >>> tok = AutoTokenizer.from_pretrained("sshleifer/bart-tiny-random")
+    >>> fn = _random_smiles(column="smiles", tokenizer=tok)
+    >>> batch = {"smiles": ["CCO", "N#N"]}
+    >>> out = fn(batch)
+    >>> len(out["input_ids"]) == len(out["labels"]) == 2  # equal lengths
+    True
+    >>> out["labels"][0] != out["input_ids"][0]           # permutation happened
+    True
+    
+    """
 
     if permuted_column is None:
         permuted_column = f"permuted_{column}"
@@ -43,16 +60,20 @@ def _random_smiles(column: str,
 
     def random_smiles(x: Mapping[str, Iterable[str]]) -> Dict[str, List[str]]:
 
-        results = convert_string_representation(x[column], 
-                                                output_representation=['smiles', 'permuted_smiles'])
+        results = convert_string_representation(
+            x[column], 
+            output_representation=['smiles', 'permuted_smiles'],
+        )
 
         x[column] = list(map(_cleaner, results['smiles']))
         x[permuted_column] = list(map(_cleaner, results['permuted_smiles']))
 
-        return _prepare_data(x, 
-                             column=column, 
-                             permuted_column=permuted_column, 
-                             tokenizer=tokenizer)
+        return _prepare_data(
+            x, 
+            column=column, 
+            permuted_column=permuted_column, 
+            tokenizer=tokenizer,
+        )
 
     return random_smiles
 

@@ -2,7 +2,9 @@
 
 from typing import Dict, Iterable, Optional, Union
 
+from glob import glob
 from math import ceil
+import multiprocessing
 import os
 
 from carabiner import colorblind_palette, print_err
@@ -12,7 +14,7 @@ from pandas import DataFrame
 from numpy import nanmean
 from matplotlib.pyplot import rcParams, cycler
 import torch
-torch.set_float32_matmul_precision('high')
+# torch.set_float32_matmul_precision('high')
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 from transformers import (
@@ -140,6 +142,13 @@ def ideal_epochs(
 ) -> int:
 
     """Chinchilla estimate of the ideal number of training epochs.
+
+    Examples
+    ========
+    >>> from datasets import Dataset
+    >>> dummy_ds = Dataset.from_dict({"smiles": ["C"] * 10})
+    >>> ideal_epochs(model, dummy_ds, tok, nrows=10) > 0
+    True
     
     """
 
@@ -161,8 +170,23 @@ def max_epochs_per_time(max_time: float,
     return n_rows / n_rows_in_time
 
 
-def _get_steps_per_epoch(n_rows: int, 
-                         batch_size: int) -> int:
+def _get_steps_per_epoch(
+    n_rows: int, 
+    batch_size: int
+) -> int:
+
+    """Wrapper around ceiling divide.
+
+    Examples
+    ========
+    >>> from datasets import Dataset
+    >>> dummy_ds = Dataset.from_dict({"smiles": ["C"] * 10})
+    >>> _get_steps_per_epoch(10, batch_size=4)  # ceiling divide
+    3
+
+    """
+
+
     return ceil(n_rows / batch_size)
 
 
@@ -208,6 +232,9 @@ class PlotterCallback(TrainerCallback):
     def on_log(self, args, state, control, **kwargs):
         _plot_history(state, self.filename)
 
+    def on_save(self, args, state, control, **kwargs):
+        self.on_log(args, state, control, **kwargs)
+
 
 class SaveDatasetStateCallback(TrainerCallback):
 
@@ -218,14 +245,28 @@ class SaveDatasetStateCallback(TrainerCallback):
 
     """
     # TODO: Wait for sateful dataloader support https://github.com/huggingface/transformers/pull/34205
-    def __init__(self, filename, *args, **kwargs):
+    def __init__(self, filename, dataset_attr: str = "train_dataset", *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.filename = filename
-        raise NotImplementedError
+        self.dataset_attr = dataset_attr
 
     def on_save(self, args, state, control, **kwargs):
-        _plot_history(state, self.filename)
-        raise NotImplementedError
+        ds = getattr(kwargs["trainer"], self.dataset_attr)
+        torch.save(
+            ds.state_dict(),
+            os.path.join(args.output_dir, f"dataset_state_{state.global_step}.pt")
+        )
+
+    # load (called by trainer when you pass --resume or resume_from_checkpoint)
+    def on_load(self, args, state, **kwargs):
+        if args.resume_from_checkpoint is not None:
+            ckpt_dir = args.resume_from_checkpoint
+            latest = max(
+                (p for p in glob(os.path.join(ckpt_dir, "dataset_state_*.pt"))),
+                key=lambda p: int(p.stem.split("_")[-1])
+            )
+            ds = getattr(kwargs["trainer"], self.dataset_attr)
+            ds.load_state_dict(torch.load(latest))
 
 
 def pretrain(
@@ -236,18 +277,20 @@ def pretrain(
     tokenizer: Optional[PreTrainedTokenizerFast] = None,
     test: Optional[Union[str, Dataset, float]] = None, 
     reinitialize_before_training: bool = True,
+    resume_training: bool = False,
     batch_size: int = 128,
-    n_epochs: Optional[int] = None,
+    n_epochs: Optional[float] = None,
     max_time: Optional[float] = None,
     early_stopping: Optional[int] = None,
     plot_filename: Optional[str] = None,
     max_learning_rate: float = 1e-4,
     warmup_steps: int = 10_000,
     weight_decay: float = .01,
-    seed: int = 0
+    seed: int = 0,
+    no_compile: bool = False
 ) -> AutoModelForSeq2SeqLM:
 
-    """
+    """Pretrain a BART model on SMILES canonicalization.
     
     """
 
@@ -264,7 +307,7 @@ def pretrain(
         )
         .shuffle(
             seed=seed, 
-            buffer_size=256,
+            buffer_size=1024,
         )
         .map(
             permutation_function, 
@@ -326,16 +369,18 @@ def pretrain(
     max_training_steps = ceil(n_epochs * n_training_rows / batch_size)
     print_err(f"Each epoch has {steps_per_epoch} steps, with the entire training taking {max_training_steps} steps")
 
-    ncpus = len(os.sched_getaffinity(0))  # TODO: This doesn't seem to work well on Crick Slurm cluster
+    ncpus = multiprocessing.count_cpus() - 1  # TODO: This doesn't seem to work well on Crick Slurm cluster
 
-    eval_steps = min(1000, steps_per_epoch) if ds_test is not None else None
+    eval_steps = min(10_000, steps_per_epoch) if ds_test is not None else None
     save_steps = (50 * eval_steps) if ds_test is not None else min(50_000, steps_per_epoch)
     training_args = Seq2SeqTrainingArguments(
-        torch_compile=True,
-        # tf32=True,
-        bf16=True,
-        optim="adamw_bnb_8bit", 
+        torch_compile=not no_compile,
+        torch_compile_mode="max-autotune" if not no_compile else None,
+        tf32=True,
+        # bf16=True,
+        # optim="adamw_bnb_8bit", 
         output_dir=output,
+        resume_from_checkpoint=output if resume_training else None,
         save_strategy="steps",
         save_steps=save_steps,
         overwrite_output_dir=True,
@@ -345,7 +390,7 @@ def pretrain(
         learning_rate=max_learning_rate,
         warmup_steps=warmup_steps,
         per_device_train_batch_size=batch_size,
-        per_device_eval_batch_size=batch_size if ds_test is not None else None,
+        per_device_eval_batch_size=batch_size, # if ds_test is not None else None,
         weight_decay=weight_decay,
         report_to=["tensorboard"],
         log_level="error",
@@ -353,7 +398,7 @@ def pretrain(
         evaluation_strategy="steps" if ds_test is not None else "no",
         eval_steps=eval_steps,
         load_best_model_at_end=ds_test is not None,
-        # dataloader_num_workers=ncpus
+        dataloader_num_workers=ncpus,
     )
 
     data_collator = DataCollatorForSeq2Seq(
@@ -361,7 +406,7 @@ def pretrain(
         padding=True,
     )
 
-    callbacks = []
+    callbacks = [SaveDatasetStateCallback()]
     if ds_test is not None and early_stopping is not None:
         print_err(f"Setting early stopping patience to {early_stopping} evaluation steps")
         callbacks.append(EarlyStoppingCallback(early_stopping_patience=early_stopping))
