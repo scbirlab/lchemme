@@ -318,7 +318,7 @@ def _embedding_routine(df: Union[str, Iterable[str], DataFrame],
             "tokenizer": tokenizer,
             "model": model, 
             "method": method,
-        }
+        },
         batched=True, 
         batch_size=batch_size, 
         desc="Calculating embedding",
