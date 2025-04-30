@@ -10,12 +10,12 @@ MODEL="facebook/bart-base"
 OUTPUT_DIR="test/outputs"
 EPOCHS=.05
 
-lchemme tokenize $TRAIN_DATA \
+TOKENIZERS_PARALLELISM=false lchemme tokenize $TRAIN_DATA \
     --column smiles \
     --model $MODEL \
     --output $OUTPUT_DIR/tokenizer
 
-lchemme pretrain $TRAIN_DATA \
+TOKENIZERS_PARALLELISM=false lchemme pretrain $TRAIN_DATA \
     --column $COLUMN \
     --test $TEST_DATA \
     --model $MODEL \
