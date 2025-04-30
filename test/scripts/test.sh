@@ -10,7 +10,7 @@ MODEL="sshleifer/bart-tiny-random"
 OUTPUT_DIR="test/outputs"
 EPOCHS=.2
 
-lchemme tokenize  \
+lchemme tokenize $TRAIN_DATA \
     --column smiles \
     --model $MODEL \
     --output $OUTPUT_DIR/tokenizer
