@@ -1,12 +1,15 @@
 """Utilities for reading and writing."""
 
-from typing import Iterable, Optional, Union
+from typing import TYPE_CHECKING, Any, Iterable, Optional, Union
 
 from carabiner import print_err
 from carabiner.cast import cast
 
-from datasets import load_dataset, Dataset, DatasetDict, IterableDataset
-from pandas import DataFrame
+if TYPE_CHECKING:
+    from datasets import Dataset, DatasetDict
+    from pandas import DataFrame
+else:
+    Dataset, DatasetDict, DataFrame = Any, Any, Any
 
 def read_dataset(
     df: Union[str, DataFrame],
@@ -19,6 +22,9 @@ def read_dataset(
     """Read a CSV path or load a Pandas DataFrame as a Huggingface Dataset.
     
     """
+
+    from datasets import load_dataset, Dataset, DatasetDict
+    from pandas import DataFrame
 
     if in_memory:
         ds_class = Dataset

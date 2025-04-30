@@ -53,7 +53,8 @@ def _return_embedding(
     True
     >>> emb_var = _return_embedding(torch.ones(1, 3, 4), method="var")
     >>> torch.all(torch.isfinite(emb_var))  # no NaNs / infs
-
+    tensor(True)
+    
     """
 
     if method == 'start':

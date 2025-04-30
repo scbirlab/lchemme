@@ -1,41 +1,33 @@
 """Utilities for pre-training chemical language models."""
 
-from typing import Dict, Iterable, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, Iterable, Optional, Union
 
-from glob import glob
 from math import ceil
 import multiprocessing
 import os
 
-from carabiner import colorblind_palette, print_err
-from carabiner.mpl import grid
+from carabiner import print_err
 from datasets import Dataset, DatasetDict
-from pandas import DataFrame
-from numpy import nanmean
-from matplotlib.pyplot import rcParams, cycler
-import torch
-# torch.set_float32_matmul_precision('high')
-torch.backends.cuda.matmul.allow_tf32 = True
-torch.backends.cudnn.allow_tf32 = True
-from transformers import (
-    AutoConfig, 
-    AutoModelForSeq2SeqLM,
-    AutoTokenizer,
-    DataCollatorForSeq2Seq, 
-    EarlyStoppingCallback,
-    TrainerCallback,
-    Seq2SeqTrainer, 
-    Seq2SeqTrainingArguments,
-    PreTrainedTokenizerFast,
-)
+
+if TYPE_CHECKING:
+    from transformers import (
+        AutoModelForSeq2SeqLM,
+        AutoTokenizer,
+        PreTrainedTokenizerFast
+    )
+else:
+    AutoModelForSeq2SeqLM, AutoTokenizer, PreTrainedTokenizerFast = Any, Any, Any
 
 from .datasets import _random_smiles
-from .io import read_dataset
 
 
-def _load_train_test(train: Union[str, Dataset, DatasetDict],
-                     column: Optional[str],
-                     test: Optional[Union[str, Dataset, float]] = None):
+def _load_train_test(
+    train: Union[str, Dataset, DatasetDict],
+    column: Optional[str],
+    test: Optional[Union[str, Dataset, float]] = None
+):
+
+    from .io import read_dataset
 
     if isinstance(train, str):
         print_err(f"Loading data from {train}")
@@ -130,7 +122,8 @@ def dataset_token_number(
             len([
                 _id for _id in item['input_ids'] if _id not in token_ids.values()
             ]) for item in dataset
-        ) / sample_fraction
+        ) 
+        / sample_fraction
     )
 
 
@@ -146,7 +139,12 @@ def ideal_epochs(
     Examples
     ========
     >>> from datasets import Dataset
-    >>> dummy_ds = Dataset.from_dict({"smiles": ["C"] * 10})
+    >>> from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+    >>> from .datasets import _random_smiles
+    >>> tok = AutoTokenizer.from_pretrained("sshleifer/bart-tiny-random")
+    >>> model = AutoModelForSeq2SeqLM.from_pretrained("sshleifer/bart-tiny-random")
+    >>> fn = _random_smiles(column="smiles", tokenizer=tok)
+    >>> dummy_ds = Dataset.from_dict({"smiles": ["C"] * 10}).map(fn, batched=True)
     >>> ideal_epochs(model, dummy_ds, tok, nrows=10) > 0
     True
     
@@ -190,85 +188,6 @@ def _get_steps_per_epoch(
     return ceil(n_rows / batch_size)
 
 
-def _plot_history(trainer_state, 
-                  filename: str) -> None:
-
-    rcParams["axes.prop_cycle"] = cycler("color", colorblind_palette())
-    data_to_plot = (
-        DataFrame(trainer_state.log_history)
-        .groupby('step')
-        .agg(nanmean)
-        .reset_index()
-    )
-    data_to_plot.to_csv(filename + '.csv',
-                        index=False)   
-
-    fig, ax = grid()
-    for _y in ('eval_loss', 'loss'):
-        if _y in data_to_plot:
-            ax.plot('step', _y, 
-                    data=data_to_plot, 
-                    label=_y)
-            ax.scatter('step', _y, 
-                       data=data_to_plot,
-                       s=1.)
-    ax.legend()
-    ax.set(xlabel='Training step', ylabel='Loss', yscale='log')
-    fig.savefig(filename + '.png', dpi=600, bbox_inches='tight')
-
-    return None
-
-
-class PlotterCallback(TrainerCallback):
-
-    """Save a PNG of training progress when logging.
-
-    """
-
-    def __init__(self, filename, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.filename = filename
-
-    def on_log(self, args, state, control, **kwargs):
-        _plot_history(state, self.filename)
-
-    def on_save(self, args, state, control, **kwargs):
-        self.on_log(args, state, control, **kwargs)
-
-
-class SaveDatasetStateCallback(TrainerCallback):
-
-    """Checkpoint the state of a Huggingface Dataset object for 
-    resuming training.
-
-    Not yet implemented.
-
-    """
-    # TODO: Wait for sateful dataloader support https://github.com/huggingface/transformers/pull/34205
-    def __init__(self, filename, dataset_attr: str = "train_dataset", *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.filename = filename
-        self.dataset_attr = dataset_attr
-
-    def on_save(self, args, state, control, **kwargs):
-        ds = getattr(kwargs["trainer"], self.dataset_attr)
-        torch.save(
-            ds.state_dict(),
-            os.path.join(args.output_dir, f"dataset_state_{state.global_step}.pt")
-        )
-
-    # load (called by trainer when you pass --resume or resume_from_checkpoint)
-    def on_load(self, args, state, **kwargs):
-        if args.resume_from_checkpoint is not None:
-            ckpt_dir = args.resume_from_checkpoint
-            latest = max(
-                (p for p in glob(os.path.join(ckpt_dir, "dataset_state_*.pt"))),
-                key=lambda p: int(p.stem.split("_")[-1])
-            )
-            ds = getattr(kwargs["trainer"], self.dataset_attr)
-            ds.load_state_dict(torch.load(latest))
-
-
 def pretrain(
     train: Union[str, Dataset, DatasetDict],
     column: Optional[str],
@@ -293,6 +212,22 @@ def pretrain(
     """Pretrain a BART model on SMILES canonicalization.
     
     """
+
+    import torch
+    # torch.set_float32_matmul_precision('high')
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    from transformers import (
+        AutoConfig, 
+        AutoModelForSeq2SeqLM,
+        DataCollatorForSeq2Seq, 
+        EarlyStoppingCallback,
+        TrainerCallback,
+        Seq2SeqTrainer, 
+        Seq2SeqTrainingArguments,
+        PreTrainedTokenizerFast,
+    )
+    from .callbacks import PlotterCallback, SaveDatasetStateCallback, _plot_history
 
     tokenizer = _load_tokenizer(tokenizer, checkpoint)
     ds_train, ds_test = _load_train_test(train, column, test)

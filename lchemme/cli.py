@@ -8,72 +8,27 @@ from functools import partial
 import os
 import sys
 
-from carabiner import cast, pprint_dict, print_err, upper_and_lower
+from carabiner import pprint_dict, upper_and_lower
 from carabiner.cliutils import clicommand, CLIOption, CLICommand, CLIApp
-from carabiner.pd import get_formats
 
 from .tokenizing import _MODELS, tokenize
 from .featurizing import _FEATURE_METHODS
 
 __version__ = '0.0.1'
 
-def _option_parser(x: Optional[List[str]]) -> Dict[str, Any]:
-
-    options = {}
-
-    try:
-        for opt in x:
-
-            try:
-                key, value = opt.split('=')
-            except ValueError:
-                raise ValueError(f"Option {opt} is misformatted. It should be in the format keyword=value.")
-            
-            try:
-                value = int(value)
-            except ValueError:
-                try:
-                    value = float(value)
-                except ValueError:
-                    pass
-
-            options[key] = value
-
-    except TypeError:
-        
-        pass
-
-    return options
-
-
-def _sum_tally(tallies: Counter, 
-               message: str = "Error counts",
-               use_length: bool = False):
-
-    total_tally = Counter()
-    
-    for tally in tallies:
-
-        if use_length:
-            total_tally.update({key: len(value) for key, value in tally.items()})
-        else:
-            total_tally.update(tally)
-
-    pprint_dict(total_tally, message=message)
-
-    return total_tally
-
 
 @clicommand(message="Tokenizing with the following parameters")
 def _tokenize(args: Namespace) -> None:
 
-    tokenizer = tokenize(args.input,
-                         column=args.column,
-                         checkpoint=args.model,
-                         vocab_size=args.vocab_size,
-                         filename=args.output,
-                         tokenizer=args.piecer,
-                         hub_repo=args.repo)
+    tokenizer = tokenize(
+        args.input,
+        column=args.column,
+        checkpoint=args.model,
+        vocab_size=args.vocab_size,
+        filename=args.output,
+        tokenizer=args.piecer,
+        hub_repo=args.repo,
+    )
     
     return None
 
