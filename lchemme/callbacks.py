@@ -5,6 +5,7 @@ import os
 
 from carabiner import print_err
 from carabiner.mpl import grid, colorblind_palette
+from datasets import Dataset, IterableDataset
 import torch
 from transformers import TrainerCallback
 
@@ -20,7 +21,7 @@ def _plot_history(
     data_to_plot = (
         DataFrame(trainer_state.log_history)
         .groupby('step')
-        .agg(nanmean)
+        .agg("mean")
         .reset_index()
     )
     data_to_plot.to_csv(
@@ -70,38 +71,80 @@ class SaveDatasetStateCallback(TrainerCallback):
     """Checkpoint the state of a Huggingface Dataset object for 
     resuming training.
 
-    Not yet implemented.
-
     """
-    # TODO: Wait for sateful dataloader support https://github.com/huggingface/transformers/pull/34205
-    def __init__(self, trainer, dataset_attr: str = "train_dataset", *args, **kwargs):
+
+    _training_data_path = lambda d: os.path.join(d, "training-data.hf")
+    _eval_data_path = lambda d: os.path.join(d, "eval-data.hf")
+    _training_state_path = lambda d: os.path.join(d, "dataset_state_{}.pt")
+
+    def __init__(self, trainer, num_rows: int, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.trainer = trainer
-        self.dataset_attr = dataset_attr
+        self.num_rows = num_rows
 
     def on_save(self, args, state, control, **kwargs):
-        ds = self.trainer.train_dataset
-        torch.save(
-            ds.state_dict(),
-            os.path.join(args.output_dir, f"dataset_state_{state.global_step}.pt")
-        )
+        train_ds = self.trainer.train_dataset
+        eval_ds = self.trainer.eval_dataset
+        train_out = self.__class__._training_data_path(args.output_dir)
+        if isinstance(train_ds, Dataset):
+            print_err(f"INFO: Saving training data at {args.output_dir}")
+            train_ds.save_to_disk(train_out)
+        elif isinstance(train_ds, IterableDataset):
+            print_err(f"INFO: Saving training data state at {args.output_dir}")
+            # if state.global_step < state.max_steps and args.process_index == 0:
+            state_dict = {
+                "seen": state.global_step * args.per_device_train_batch_size * args.world_size,
+                "cursor": train_ds.state_dict(),
+                "num_rows": self.num_rows,
+            }
+            torch.save(
+                state_dict,
+                self.__class__._training_state_path(args.output_dir).format(state.global_step)
+            )
+        else:
+            print_err(f"WARNING: Not saving training dataset")
 
-    # load (called by trainer when you pass --resume or resume_from_checkpoint)
-    def on_load(self, args, state, **kwargs):
-        if args.resume_from_checkpoint is not None:
-            ckpt_dir = args.resume_from_checkpoint
-            dataset_checkpoints = glob(os.path.join(ckpt_dir, "dataset_state_*.pt"))
-            if len(dataset_checkpoints) > 0:
-                latest = max(
-                    (
-                        p for p in glob(os.path.join(
-                            args.resume_from_checkpoint, 
-                            "dataset_state_*.pt"
-                        ))
-                    ),
-                    key=lambda p: int(p.stem.split("_")[-1])
-                )
-                ds = self.trainer.train_dataset
-                ds.load_state_dict(torch.load(latest))
+        if eval_ds is not None:
+            print_err(f"INFO: Saving eval data at {args.output_dir}")
+            eval_out = self.__class__._eval_data_path(args.output_dir)
+            if isinstance(eval_ds, Dataset):
+                train_ds.save_to_disk(train_out)
             else:
-                print_err(f"WARNING: Could not load dataset state from '{ckpt_dir}'")
+                print_err(f"WARNING: Not saving eval dataset")
+
+# load (called by trainer when you pass --resume or resume_from_checkpoint)
+def dataset_state_dict_loader(checkpoint, dataset):
+    num_rows = None
+    if checkpoint is not None:
+        print_err(f"INFO: Loading dataset state from '{checkpoint}'")
+        dataset_checkpoints = glob(
+            SaveDatasetStateCallback._training_state_path(checkpoint)
+            .format("*")
+        )
+        if len(dataset_checkpoints) > 0:
+            latest = max(
+                dataset_checkpoints,
+                key=lambda p: int(p.split("_")[-1].split(".pt")[0])
+            )
+            if isinstance(dataset, IterableDataset):
+                state = torch.load(latest)
+                example_idx = state["cursor"]["examples_iterable"]["previous_state_example_idx"]
+                num_rows = state["num_rows"]
+                seen = state["seen"]
+                print_err(
+                    f"INFO: dataset state at {latest} had reached row {seen} / {num_rows}."
+                )
+                for i, _ in enumerate(dataset):
+                    if i == seen:
+                        break
+            else:
+                print_err(
+                    f"""
+                    WARNING: Training dataset is not IterableDataset, was {type(dataset)}. 
+                    Cannot load state from '{checkpoint}'.
+                    """
+                )
+        else:
+            print_err(f"WARNING: Could not load dataset state from '{checkpoint}'.")
+    return dataset, num_rows
+        

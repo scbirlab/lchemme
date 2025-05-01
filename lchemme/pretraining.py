@@ -21,6 +21,10 @@ else:
 from .datasets import _random_smiles
 
 
+_DEFAULT_BATCH_SIZE = 128
+_DEFAULT_SEED = 0
+
+
 def _load_train_test(
     train: Union[str, Dataset, DatasetDict],
     column: Optional[str],
@@ -115,17 +119,16 @@ def dataset_token_number(
             raise ValueError("Dataset is Iterable and number of rows not provided.")
 
     sample_fraction = max_rows / total_rows
-
-    if total_rows > max_rows:
-        dataset = dataset.shuffle(seed=1).take(max_rows)
+    dataset_sample = dataset.shuffle(seed=1).take(min(max_rows,total_rows))
 
     token_ids = _get_token_ids(tokenizer)
 
     return ceil(
         sum(
             len([
-                _id for _id in item['input_ids'] if _id not in token_ids.values()
-            ]) for item in dataset
+                _id for _id in item['input_ids'] 
+                if _id not in token_ids.values()
+            ]) for item in dataset_sample
         ) 
         / sample_fraction
     )
@@ -192,16 +195,61 @@ def _get_steps_per_epoch(
     return ceil(n_rows / batch_size)
 
 
-def pretrain(
+def _load_new_dataset(
     train: Union[str, Dataset, DatasetDict],
     column: Optional[str],
+    tokenizer: PreTrainedTokenizerFast,
+    test: Optional[Union[str, Dataset, float]] = None, 
+    batch_size: int = _DEFAULT_BATCH_SIZE,
+    seed: int = _DEFAULT_SEED,
+):
+    ds_train, ds_test = _load_train_test(train, column, test)
+    permutation_function = _random_smiles(column, tokenizer)
+
+    def _filter_fn(x):
+        return x[column] is not None and x[column] != ""
+    ds_train = (
+        ds_train
+        .filter(_filter_fn)
+        .to_iterable_dataset(
+            num_shards=256,
+        )
+        .shuffle(
+            seed=seed, 
+            buffer_size=1024,
+        )
+        .map(
+            permutation_function, 
+            batched=True, 
+            batch_size=batch_size,
+        )
+    )
+    if ds_test is not None:
+        ds_test = (
+            ds_test
+            .filter(_filter_fn)
+            .to_iterable_dataset(
+                num_shards=256,
+            )
+            .map(
+                permutation_function, 
+                batched=True, 
+                batch_size=batch_size,
+            )
+        )
+    # print(ds_train, ds_test)
+    return ds_train, ds_test
+
+def pretrain(
     checkpoint: str,
     output: str,
+    train: Optional[Union[str, Dataset, DatasetDict]] = None,
+    column: Optional[str] = None,
     tokenizer: Optional[PreTrainedTokenizerFast] = None,
     test: Optional[Union[str, Dataset, float]] = None, 
     reinitialize_before_training: bool = True,
     resume_training: bool = False,
-    batch_size: int = 128,
+    batch_size: int = _DEFAULT_BATCH_SIZE,
     n_epochs: Optional[float] = None,
     max_time: Optional[float] = None,
     early_stopping: Optional[int] = None,
@@ -209,7 +257,7 @@ def pretrain(
     max_learning_rate: float = 1e-4,
     warmup_steps: int = 10_000,
     weight_decay: float = .01,
-    seed: int = 0,
+    seed: int = _DEFAULT_SEED,
     no_compile: bool = False
 ) -> AutoModelForSeq2SeqLM:
 
@@ -217,6 +265,7 @@ def pretrain(
     
     """
 
+    from datasets import Dataset, IterableDataset
     import torch
     # torch.set_float32_matmul_precision('high')
     torch.backends.cuda.matmul.allow_tf32 = True
@@ -234,43 +283,29 @@ def pretrain(
         Seq2SeqTrainingArguments,
         PreTrainedTokenizerFast,
     )
-    from .callbacks import PlotterCallback, SaveDatasetStateCallback, _plot_history
+    from .callbacks import PlotterCallback, SaveDatasetStateCallback, _plot_history, dataset_state_dict_loader
 
     tokenizer = _load_tokenizer(tokenizer, checkpoint)
-    ds_train, ds_test = _load_train_test(train, column, test)
-    
-    permutation_function = _random_smiles(column, tokenizer)
-    n_training_rows = ds_train.num_rows
-    ds_train = (
-        ds_train
-        .filter(lambda x: x[column] is not None and x[column] != "")
-        .to_iterable_dataset(
-            num_shards=256,
-        )
-        .shuffle(
-            seed=seed, 
-            buffer_size=1024,
-        )
-        .map(
-            permutation_function, 
-            batched=True, 
-            batch_size=batch_size,
-        )
+    ds_train, ds_test = _load_new_dataset(
+        train=train,
+        column=column,
+        test=test, 
+        tokenizer=tokenizer,
     )
-    if ds_test is not None:
-        ds_test = (
-            ds_test
-                .filter(lambda x: x[column] is not None and x[column] != "")
-                .shuffle(seed=seed)
-                .map(
-                    permutation_function, 
-                    batched=True, 
-                    batch_size=batch_size,
-                )
-        )
-    print_err(f"Dataset contains {dataset_token_number(ds_train, tokenizer, nrows=n_training_rows)} tokens")
+    # print_err(ds_train)
+    if resume_training:
+        ds_train, n_training_rows = dataset_state_dict_loader(checkpoint, ds_train)
+    else:
+        if isinstance(ds_train, Dataset):
+            n_training_rows = ds_train.num_rows
+        elif isinstance(ds_train, IterableDataset):
+            for n_training_rows, _ in enumerate(ds_train):
+                pass
+        else:
+            raise TypeError("Training data should be a Hugging Face dataset.")
+        print_err(f"Dataset contains ~{dataset_token_number(ds_train, tokenizer, nrows=n_training_rows)} tokens")
 
-    if reinitialize_before_training:
+    if reinitialize_before_training and not resume_training:
         print_err(f"Loading model architecture from {checkpoint} with vocab size {tokenizer.vocab_size}")
         config = AutoConfig.from_pretrained(
             checkpoint,
@@ -283,13 +318,16 @@ def pretrain(
         model = AutoModelForSeq2SeqLM.from_pretrained(checkpoint)
     print_err(f"Loaded model from {checkpoint}; it has {model.num_parameters()} parameters")
 
-    ideal_n_epochs = ideal_epochs(
-        model, 
-        ds_train, 
-        tokenizer, 
-        nrows=n_training_rows,
-    )
-    print_err(f"Ideal number of epochs (based on Chinchilla estimate) is {ideal_n_epochs}")
+    if not resume_training:
+        ideal_n_epochs = ideal_epochs(
+            model, 
+            ds_train, 
+            tokenizer, 
+            nrows=n_training_rows,
+        )
+        print_err(f"Ideal number of epochs (based on Chinchilla estimate) is {ideal_n_epochs}")
+    else:
+        ideal_n_epochs = 1.
 
     if max_time is not None:
         n_epochs = max_epochs_per_time(max_time, n_training_rows)
@@ -299,15 +337,17 @@ def pretrain(
         
     print_err(f"Training will have {n_epochs:.2f} epochs")
 
+    ncpus = min(4, multiprocessing.cpu_count() - 1)  # TODO: This doesn't seem to work well on Crick Slurm cluster
+    
+    
     steps_per_epoch = _get_steps_per_epoch(n_training_rows, batch_size)
     max_training_steps = ceil(n_epochs * n_training_rows / batch_size)
     print_err(f"Each epoch has {steps_per_epoch} steps, with the entire training taking {max_training_steps} steps")
 
-    ncpus = max(4, multiprocessing.cpu_count() - 1)  # TODO: This doesn't seem to work well on Crick Slurm cluster
-    
     eval_steps = min(10_000, steps_per_epoch) if ds_test is not None else None
     save_steps = (50 * eval_steps) if ds_test is not None else min(50_000, steps_per_epoch)
     training_args = Seq2SeqTrainingArguments(
+        torch_compile=not no_compile,
         tf32=torch.cuda.is_available(),
         # bf16=True,
         # optim="adamw_bnb_8bit", 
@@ -334,20 +374,12 @@ def pretrain(
         dataloader_num_workers=ncpus,
     )
 
-    # tokenizer = _load_tokenizer(tokenizer, checkpoint)  # reload to stop warnings about forking
+    tokenizer = _load_tokenizer(tokenizer, checkpoint)  # reload to stop warnings about forking
     data_collator = DataCollatorForSeq2Seq(
         tokenizer=tokenizer, 
+        model=model,
         padding=True,
     )
-
-    if not no_compile:
-        try:
-            model = torch.compile(
-                model,
-                mode="max-autotune",
-            )
-        except Exception:
-            pass
     
     tokenizer = _load_tokenizer(tokenizer, checkpoint)  # reload to stop warnings about forking
     trainer = Seq2SeqTrainer(
@@ -358,14 +390,15 @@ def pretrain(
         processing_class=tokenizer,
         data_collator=data_collator,
     )
-    trainer.add_callback(SaveDatasetStateCallback(trainer))
+    trainer.add_callback(SaveDatasetStateCallback(trainer, num_rows=n_training_rows))
     if ds_test is not None and early_stopping is not None:
         print_err(f"Setting early stopping patience to {early_stopping} evaluation steps")
         trainer.add_callback(
             EarlyStoppingCallback(early_stopping_patience=early_stopping)
         )
-    if plot_filename is not None:
+    else:
         print_err("No early stopping.")
+    if plot_filename is not None:
         trainer.add_callback(PlotterCallback(plot_filename))
 
     trainer.train()
