@@ -10,12 +10,16 @@ MODEL="facebook/bart-base"
 OUTPUT_DIR="test/outputs"
 EPOCHS=.05
 
-TOKENIZERS_PARALLELISM=false lchemme tokenize $TRAIN_DATA \
+export TOKENIZERS_PARALLELISM=false
+
+lchemme tokenize \
+    --train $TRAIN_DATA \
     --column smiles \
     --model $MODEL \
     --output $OUTPUT_DIR/tokenizer
 
-TOKENIZERS_PARALLELISM=false lchemme pretrain $TRAIN_DATA \
+lchemme pretrain \
+    --train $TRAIN_DATA \
     --column $COLUMN \
     --test $TEST_DATA \
     --model $MODEL \
@@ -24,18 +28,20 @@ TOKENIZERS_PARALLELISM=false lchemme pretrain $TRAIN_DATA \
     --output $OUTPUT_DIR/model \
     --plot $OUTPUT_DIR/training-log
 
-lchemme pretrain $TRAIN_DATA \
+lchemme pretrain \
+    --train $TRAIN_DATA \
     --column $COLUMN \
     --test $TEST_DATA \
-    --model $OUTPUT_DIR/model \
     --resume \
+    --model $OUTPUT_DIR/model \
     --epochs $EPOCHS \
     --output $OUTPUT_DIR/model \
     --plot $OUTPUT_DIR/training-log
 
-lchemme featurize $TEST_DATA \
+lchemme featurize \
+    --train $TEST_DATA \
     --column $COLUMN \
-    --batch-size 64 \
+    --batch-size 16 \
     --method max mean median start sum var \
     --model $OUTPUT_DIR/model \
     --plot $OUTPUT_DIR/umap \
