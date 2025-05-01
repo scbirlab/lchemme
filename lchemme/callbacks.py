@@ -128,7 +128,6 @@ def dataset_state_dict_loader(checkpoint, dataset):
             )
             if isinstance(dataset, IterableDataset):
                 state = torch.load(latest)
-                example_idx = state["cursor"]["examples_iterable"]["previous_state_example_idx"]
                 num_rows = state["num_rows"]
                 seen = state["seen"]
                 print_err(
