@@ -20,7 +20,7 @@ from .featurizing import _FEATURE_METHODS
 def _tokenize(args: Namespace) -> None:
 
     tokenizer = tokenize(
-        args.input,
+        args.train,
         column=args.column,
         checkpoint=args.model,
         vocab_size=args.vocab_size,
@@ -41,9 +41,17 @@ def _pretrain(args: Namespace) -> None:
         test = float(args.test)
     except (TypeError, ValueError):
         test = args.test
+
+    required_args = ("train", "column", "model")
+    missing_args = [
+        key for key in required_args
+        if getattr(args, key) is None
+    ]
+    if len(missing_args) > 0:
+        raise ValueError(f"Missing required argument(s): --{missing_args}")
     
     model = pretrain(
-        args.input,
+        train=args.train,
         column=args.column,
         checkpoint=args.model,
         output=args.output,
@@ -75,7 +83,7 @@ def _featurize(args: Namespace) -> None:
         tokenizer = args.tokenizer
 
     output_filename = embed_smiles_files(
-        filename=args.input, 
+        filename=args.train, 
         tokenizer=tokenizer, 
         model=args.model, 
         output=args.output,
@@ -96,9 +104,12 @@ def main() -> None:
                              type=FileType('r'), 
                              nargs='?',
                              help='Input columnar Excel, CSV or TSV file. Default: STDIN.')
-    inputs = CLIOption('input', 
-                       type=str, 
-                       help='Input columnar Excel, CSV or TSV file.')
+    inputs = CLIOption(
+        '--train', '-1', 
+        type=str, 
+        default=None,
+        help='Input columnar Excel, CSV or TSV file.',
+    )
     test_input = CLIOption('--test', '-2',
                            type=str, 
                            default=None,
