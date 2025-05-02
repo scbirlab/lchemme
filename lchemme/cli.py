@@ -8,72 +8,26 @@ from functools import partial
 import os
 import sys
 
-from carabiner import cast, pprint_dict, print_err, upper_and_lower
+from carabiner import pprint_dict, upper_and_lower
 from carabiner.cliutils import clicommand, CLIOption, CLICommand, CLIApp
-from carabiner.pd import get_formats
 
+from . import __version__
 from .tokenizing import _MODELS, tokenize
 from .featurizing import _FEATURE_METHODS
-
-__version__ = '0.0.1'
-
-def _option_parser(x: Optional[List[str]]) -> Dict[str, Any]:
-
-    options = {}
-
-    try:
-        for opt in x:
-
-            try:
-                key, value = opt.split('=')
-            except ValueError:
-                raise ValueError(f"Option {opt} is misformatted. It should be in the format keyword=value.")
-            
-            try:
-                value = int(value)
-            except ValueError:
-                try:
-                    value = float(value)
-                except ValueError:
-                    pass
-
-            options[key] = value
-
-    except TypeError:
-        
-        pass
-
-    return options
-
-
-def _sum_tally(tallies: Counter, 
-               message: str = "Error counts",
-               use_length: bool = False):
-
-    total_tally = Counter()
-    
-    for tally in tallies:
-
-        if use_length:
-            total_tally.update({key: len(value) for key, value in tally.items()})
-        else:
-            total_tally.update(tally)
-
-    pprint_dict(total_tally, message=message)
-
-    return total_tally
 
 
 @clicommand(message="Tokenizing with the following parameters")
 def _tokenize(args: Namespace) -> None:
 
-    tokenizer = tokenize(args.input,
-                         column=args.column,
-                         checkpoint=args.model,
-                         vocab_size=args.vocab_size,
-                         filename=args.output,
-                         tokenizer=args.piecer,
-                         hub_repo=args.repo)
+    tokenizer = tokenize(
+        args.train,
+        column=args.column,
+        checkpoint=args.model,
+        vocab_size=args.vocab_size,
+        filename=args.output,
+        tokenizer=args.piecer,
+        hub_repo=args.repo,
+    )
     
     return None
 
@@ -87,22 +41,33 @@ def _pretrain(args: Namespace) -> None:
         test = float(args.test)
     except (TypeError, ValueError):
         test = args.test
+
+    required_args = ("train", "column", "model")
+    missing_args = [
+        key for key in required_args
+        if getattr(args, key) is None
+    ]
+    if len(missing_args) > 0:
+        raise ValueError(f"Missing required argument(s): --{missing_args}")
     
-    model = pretrain(args.input,
-                     column=args.column,
-                     checkpoint=args.model,
-                     output=args.output,
-                     tokenizer=args.tokenizer,
-                     reinitialize_before_training=not args.resume,
-                     test=test, 
-                     batch_size=args.batch_size,
-                     n_epochs=args.epochs,
-                     early_stopping=args.early_stopping,
-                     max_time=args.max_time,
-                     plot_filename=args.plot,
-                     max_learning_rate=1e-4,
-                     warmup_steps=10_000,
-                     weight_decay=.01)
+    model = pretrain(
+        train=args.train,
+        column=args.column,
+        checkpoint=args.model,
+        output=args.output,
+        tokenizer=args.tokenizer,
+        reinitialize_before_training=not args.resume,
+        resume_training=args.resume,
+        test=test, 
+        batch_size=args.batch_size,
+        n_epochs=args.epochs,
+        early_stopping=args.early_stopping,
+        max_time=args.max_time,
+        plot_filename=args.plot,
+        max_learning_rate=1e-4,
+        warmup_steps=10_000,
+        weight_decay=.01,
+    )
 
     return None
 
@@ -118,7 +83,7 @@ def _featurize(args: Namespace) -> None:
         tokenizer = args.tokenizer
 
     output_filename = embed_smiles_files(
-        filename=args.input, 
+        filename=args.train, 
         tokenizer=tokenizer, 
         model=args.model, 
         output=args.output,
@@ -139,9 +104,12 @@ def main() -> None:
                              type=FileType('r'), 
                              nargs='?',
                              help='Input columnar Excel, CSV or TSV file. Default: STDIN.')
-    inputs = CLIOption('input', 
-                       type=str, 
-                       help='Input columnar Excel, CSV or TSV file.')
+    inputs = CLIOption(
+        '--train', '-1', 
+        type=str, 
+        default=None,
+        help='Input columnar Excel, CSV or TSV file.',
+    )
     test_input = CLIOption('--test', '-2',
                            type=str, 
                            default=None,
@@ -248,14 +216,24 @@ def main() -> None:
             resume,
             ],
         )
-    featurize = CLICommand('featurize', 
-                           description='Get vector embeddings of a chemical dataset using a pre-trained large language model.',
-                           main=_featurize,
-                           options=[inputs, output_stream, column, feature_method, checkpoint, tokenizer_,
-                                    batch_size, plot_, extras])
+    featurize = CLICommand(
+        'featurize', 
+        description='Get vector embeddings of a chemical dataset using a pre-trained large language model.',
+        main=_featurize,
+        options=[
+            inputs, 
+            output_stream, 
+            column, 
+            feature_method, 
+            checkpoint, 
+            tokenizer_,
+            batch_size, 
+            plot_, 
+            extras,
+        ])
 
     app = CLIApp(
-        "lchemmy",
+        "lchemme",
         version=__version__,
         description="Training and applying large chemistry models.",
         commands=[tokenize, pretrain, featurize],

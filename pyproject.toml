@@ -1,6 +1,6 @@
 [project]
 name = "lchemme"
-version = "0.0.1"
+version = "0.0.2"
 authors = [
   { name="Eachan Johnson", email="eachan.johnson@crick.ac.uk" },
 ]
@@ -38,14 +38,12 @@ classifiers = [
 
 dependencies = [ 
   "carabiner-tools[pd,mpl]>=0.0.4",
-  "datasets<=3.1.0",
+  "datasets>=3.1.0",
   "openpyxl==3.1.0", 
   "pandas",
   "schemist>=0.0.4.post1",
   "tensorboard",
   "tokenizers",
-  "torch>=2.3",
-  "torchvision",
   "transformers[torch]",
   "umap-learn",
 ]

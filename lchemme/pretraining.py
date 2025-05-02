@@ -1,39 +1,37 @@
 """Utilities for pre-training chemical language models."""
 
-from typing import Dict, Iterable, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, Iterable, Optional, Union
 
 from math import ceil
+import multiprocessing
 import os
 
-from carabiner import colorblind_palette, print_err
-from carabiner.mpl import grid
+from carabiner import print_err
 from datasets import Dataset, DatasetDict
-from pandas import DataFrame
-from numpy import nanmean
-from matplotlib.pyplot import rcParams, cycler
-import torch
-torch.set_float32_matmul_precision('high')
-torch.backends.cuda.matmul.allow_tf32 = True
-torch.backends.cudnn.allow_tf32 = True
-from transformers import (
-    AutoConfig, 
-    AutoModelForSeq2SeqLM,
-    AutoTokenizer,
-    DataCollatorForSeq2Seq, 
-    EarlyStoppingCallback,
-    TrainerCallback,
-    Seq2SeqTrainer, 
-    Seq2SeqTrainingArguments,
-    PreTrainedTokenizerFast,
-)
+
+if TYPE_CHECKING:
+    from transformers import (
+        AutoModelForSeq2SeqLM,
+        AutoTokenizer,
+        PreTrainedTokenizerFast
+    )
+else:
+    AutoModelForSeq2SeqLM, AutoTokenizer, PreTrainedTokenizerFast = Any, Any, Any
 
 from .datasets import _random_smiles
-from .io import read_dataset
 
 
-def _load_train_test(train: Union[str, Dataset, DatasetDict],
-                     column: Optional[str],
-                     test: Optional[Union[str, Dataset, float]] = None):
+_DEFAULT_BATCH_SIZE = 128
+_DEFAULT_SEED = 0
+
+
+def _load_train_test(
+    train: Union[str, Dataset, DatasetDict],
+    column: Optional[str],
+    test: Optional[Union[str, Dataset, float]] = None
+):
+
+    from .io import read_dataset
 
     if isinstance(train, str):
         print_err(f"Loading data from {train}")
@@ -70,8 +68,12 @@ def _load_train_test(train: Union[str, Dataset, DatasetDict],
     return ds_train, ds_test
 
 
-def _load_tokenizer(tokenizer: Optional[Union[PreTrainedTokenizerFast, str]] = None,
-                    checkpoint: Optional[str] = None) -> PreTrainedTokenizerFast:
+def _load_tokenizer(
+    tokenizer: Optional[Union[PreTrainedTokenizerFast, str]] = None,
+    checkpoint: Optional[str] = None
+) -> PreTrainedTokenizerFast:
+    
+    from transformers import AutoTokenizer, PreTrainedTokenizerFast
 
     if tokenizer is None:
         print_err(f"Loading tokenizer from {checkpoint}")
@@ -117,18 +119,18 @@ def dataset_token_number(
             raise ValueError("Dataset is Iterable and number of rows not provided.")
 
     sample_fraction = max_rows / total_rows
-
-    if total_rows > max_rows:
-        dataset = dataset.shuffle(seed=1).take(max_rows)
+    dataset_sample = dataset.shuffle(seed=1).take(min(max_rows,total_rows))
 
     token_ids = _get_token_ids(tokenizer)
 
     return ceil(
         sum(
             len([
-                _id for _id in item['input_ids'] if _id not in token_ids.values()
-            ]) for item in dataset
-        ) / sample_fraction
+                _id for _id in item['input_ids'] 
+                if _id not in token_ids.values()
+            ]) for item in dataset_sample
+        ) 
+        / sample_fraction
     )
 
 
@@ -140,6 +142,18 @@ def ideal_epochs(
 ) -> int:
 
     """Chinchilla estimate of the ideal number of training epochs.
+
+    Examples
+    ========
+    >>> from datasets import Dataset
+    >>> from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
+    >>> from .datasets import _random_smiles
+    >>> tok = AutoTokenizer.from_pretrained("sshleifer/bart-tiny-random")
+    >>> model = AutoModelForSeq2SeqLM.from_pretrained("sshleifer/bart-tiny-random")
+    >>> fn = _random_smiles(column="smiles", tokenizer=tok)
+    >>> dummy_ds = Dataset.from_dict({"smiles": ["C"] * 10}).map(fn, batched=True)
+    >>> ideal_epochs(model, dummy_ds, tok, nrows=10) > 0
+    True
     
     """
 
@@ -161,110 +175,48 @@ def max_epochs_per_time(max_time: float,
     return n_rows / n_rows_in_time
 
 
-def _get_steps_per_epoch(n_rows: int, 
-                         batch_size: int) -> int:
+def _get_steps_per_epoch(
+    n_rows: int, 
+    batch_size: int
+) -> int:
+
+    """Wrapper around ceiling divide.
+
+    Examples
+    ========
+    >>> from datasets import Dataset
+    >>> dummy_ds = Dataset.from_dict({"smiles": ["C"] * 10})
+    >>> _get_steps_per_epoch(10, batch_size=4)  # ceiling divide
+    3
+
+    """
+
+
     return ceil(n_rows / batch_size)
 
 
-def _plot_history(trainer_state, 
-                  filename: str) -> None:
-
-    rcParams["axes.prop_cycle"] = cycler("color", colorblind_palette())
-    data_to_plot = (
-        DataFrame(trainer_state.log_history)
-        .groupby('step')
-        .agg(nanmean)
-        .reset_index()
-    )
-    data_to_plot.to_csv(filename + '.csv',
-                        index=False)   
-
-    fig, ax = grid()
-    for _y in ('eval_loss', 'loss'):
-        if _y in data_to_plot:
-            ax.plot('step', _y, 
-                    data=data_to_plot, 
-                    label=_y)
-            ax.scatter('step', _y, 
-                       data=data_to_plot,
-                       s=1.)
-    ax.legend()
-    ax.set(xlabel='Training step', ylabel='Loss', yscale='log')
-    fig.savefig(filename + '.png', dpi=600, bbox_inches='tight')
-
-    return None
-
-
-class PlotterCallback(TrainerCallback):
-
-    """Save a PNG of training progress when logging.
-
-    """
-
-    def __init__(self, filename, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.filename = filename
-
-    def on_log(self, args, state, control, **kwargs):
-        _plot_history(state, self.filename)
-
-
-class SaveDatasetStateCallback(TrainerCallback):
-
-    """Checkpoint the state of a Huggingface Dataset object for 
-    resuming training.
-
-    Not yet implemented.
-
-    """
-    # TODO: Wait for sateful dataloader support https://github.com/huggingface/transformers/pull/34205
-    def __init__(self, filename, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.filename = filename
-        raise NotImplementedError
-
-    def on_save(self, args, state, control, **kwargs):
-        _plot_history(state, self.filename)
-        raise NotImplementedError
-
-
-def pretrain(
+def _load_new_dataset(
     train: Union[str, Dataset, DatasetDict],
     column: Optional[str],
-    checkpoint: str,
-    output: str,
-    tokenizer: Optional[PreTrainedTokenizerFast] = None,
+    tokenizer: PreTrainedTokenizerFast,
     test: Optional[Union[str, Dataset, float]] = None, 
-    reinitialize_before_training: bool = True,
-    batch_size: int = 128,
-    n_epochs: Optional[int] = None,
-    max_time: Optional[float] = None,
-    early_stopping: Optional[int] = None,
-    plot_filename: Optional[str] = None,
-    max_learning_rate: float = 1e-4,
-    warmup_steps: int = 10_000,
-    weight_decay: float = .01,
-    seed: int = 0
-) -> AutoModelForSeq2SeqLM:
-
-    """
-    
-    """
-
-    tokenizer = _load_tokenizer(tokenizer, checkpoint)
+    batch_size: int = _DEFAULT_BATCH_SIZE,
+    seed: int = _DEFAULT_SEED,
+):
     ds_train, ds_test = _load_train_test(train, column, test)
-    
     permutation_function = _random_smiles(column, tokenizer)
-    n_training_rows = ds_train.num_rows
+
+    def _filter_fn(x):
+        return x[column] is not None and x[column] != ""
     ds_train = (
         ds_train
-        .filter(lambda x: x[column] is not None and x[column] != "")
+        .filter(_filter_fn)
         .to_iterable_dataset(
             num_shards=256,
         )
         .shuffle(
             seed=seed, 
-            buffer_size=256,
+            buffer_size=1024,
         )
         .map(
             permutation_function, 
@@ -275,30 +227,90 @@ def pretrain(
     if ds_test is not None:
         ds_test = (
             ds_test
-                .filter(lambda x: x[column] is not None and x[column] != "")
-                .to_iterable_dataset(
-                    num_shards=256,
-                )
-                .shuffle(
-                    seed=seed, 
-                    buffer_size=256,
-                )
-                .map(
-                    permutation_function, 
-                    batched=True, 
-                    batch_size=batch_size,
-                )
+            .filter(_filter_fn)
+            .to_iterable_dataset(
+                num_shards=256,
+            )
+            .map(
+                permutation_function, 
+                batched=True, 
+                batch_size=batch_size,
+            )
         )
-    print_err(f"Dataset contains {dataset_token_number(ds_train, tokenizer, nrows=n_training_rows)} tokens")
+    # print(ds_train, ds_test)
+    return ds_train, ds_test
 
-    token_ids = _get_token_ids(tokenizer)
+def pretrain(
+    checkpoint: str,
+    output: str,
+    train: Optional[Union[str, Dataset, DatasetDict]] = None,
+    column: Optional[str] = None,
+    tokenizer: Optional[PreTrainedTokenizerFast] = None,
+    test: Optional[Union[str, Dataset, float]] = None, 
+    reinitialize_before_training: bool = True,
+    resume_training: bool = False,
+    batch_size: int = _DEFAULT_BATCH_SIZE,
+    n_epochs: Optional[float] = None,
+    max_time: Optional[float] = None,
+    early_stopping: Optional[int] = None,
+    plot_filename: Optional[str] = None,
+    max_learning_rate: float = 1e-4,
+    warmup_steps: int = 10_000,
+    weight_decay: float = .01,
+    seed: int = _DEFAULT_SEED,
+    no_compile: bool = False
+) -> AutoModelForSeq2SeqLM:
 
-    if reinitialize_before_training:
+    """Pretrain a BART model on SMILES canonicalization.
+    
+    """
+
+    from datasets import Dataset, IterableDataset
+    import torch
+    # torch.set_float32_matmul_precision('high')
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    from torch._dynamo import config as dynamo_config
+    dynamo_config.suppress_errors = True
+    dynamo_config.capture_scalar_outputs = True
+    from transformers import (
+        AutoConfig, 
+        AutoModelForSeq2SeqLM,
+        DataCollatorForSeq2Seq, 
+        EarlyStoppingCallback,
+        TrainerCallback,
+        Seq2SeqTrainer, 
+        Seq2SeqTrainingArguments,
+        PreTrainedTokenizerFast,
+    )
+    from .callbacks import PlotterCallback, SaveDatasetStateCallback, _plot_history, dataset_state_dict_loader
+
+    tokenizer = _load_tokenizer(tokenizer, checkpoint)
+    ds_train, ds_test = _load_new_dataset(
+        train=train,
+        column=column,
+        test=test, 
+        tokenizer=tokenizer,
+    )
+    # print_err(ds_train)
+    if resume_training:
+        ds_train, n_training_rows = dataset_state_dict_loader(checkpoint, ds_train)
+    else:
+        if isinstance(ds_train, Dataset):
+            n_training_rows = ds_train.num_rows
+        elif isinstance(ds_train, IterableDataset):
+            for n_training_rows, _ in enumerate(ds_train):
+                pass
+        else:
+            raise TypeError("Training data should be a Hugging Face dataset.")
+        print_err(f"Dataset contains ~{dataset_token_number(ds_train, tokenizer, nrows=n_training_rows)} tokens")
+
+    if reinitialize_before_training and not resume_training:
         print_err(f"Loading model architecture from {checkpoint} with vocab size {tokenizer.vocab_size}")
         config = AutoConfig.from_pretrained(
             checkpoint,
             vocab_size=tokenizer.vocab_size,
-            **token_ids,
+            **_get_token_ids(tokenizer),
         )
         model = AutoModelForSeq2SeqLM.from_config(config=config)
     else:
@@ -306,13 +318,16 @@ def pretrain(
         model = AutoModelForSeq2SeqLM.from_pretrained(checkpoint)
     print_err(f"Loaded model from {checkpoint}; it has {model.num_parameters()} parameters")
 
-    ideal_n_epochs = ideal_epochs(
-        model, 
-        ds_train, 
-        tokenizer, 
-        nrows=n_training_rows,
-    )
-    print_err(f"Ideal number of epochs (based on Chinchilla estimate) is {ideal_n_epochs}")
+    if not resume_training:
+        ideal_n_epochs = ideal_epochs(
+            model, 
+            ds_train, 
+            tokenizer, 
+            nrows=n_training_rows,
+        )
+        print_err(f"Ideal number of epochs (based on Chinchilla estimate) is {ideal_n_epochs}")
+    else:
+        ideal_n_epochs = 1.
 
     if max_time is not None:
         n_epochs = max_epochs_per_time(max_time, n_training_rows)
@@ -322,20 +337,22 @@ def pretrain(
         
     print_err(f"Training will have {n_epochs:.2f} epochs")
 
+    ncpus = min(4, multiprocessing.cpu_count() - 1)  # TODO: This doesn't seem to work well on Crick Slurm cluster
+    
+    
     steps_per_epoch = _get_steps_per_epoch(n_training_rows, batch_size)
     max_training_steps = ceil(n_epochs * n_training_rows / batch_size)
     print_err(f"Each epoch has {steps_per_epoch} steps, with the entire training taking {max_training_steps} steps")
 
-    ncpus = len(os.sched_getaffinity(0))  # TODO: This doesn't seem to work well on Crick Slurm cluster
-
-    eval_steps = min(1000, steps_per_epoch) if ds_test is not None else None
+    eval_steps = min(10_000, steps_per_epoch) if ds_test is not None else None
     save_steps = (50 * eval_steps) if ds_test is not None else min(50_000, steps_per_epoch)
     training_args = Seq2SeqTrainingArguments(
-        torch_compile=True,
-        # tf32=True,
-        bf16=True,
-        optim="adamw_bnb_8bit", 
+        torch_compile=not no_compile,
+        tf32=torch.cuda.is_available(),
+        # bf16=True,
+        # optim="adamw_bnb_8bit", 
         output_dir=output,
+        resume_from_checkpoint=checkpoint if resume_training else None,
         save_strategy="steps",
         save_steps=save_steps,
         overwrite_output_dir=True,
@@ -345,39 +362,44 @@ def pretrain(
         learning_rate=max_learning_rate,
         warmup_steps=warmup_steps,
         per_device_train_batch_size=batch_size,
-        per_device_eval_batch_size=batch_size if ds_test is not None else None,
+        per_device_eval_batch_size=batch_size, # if ds_test is not None else None,
         weight_decay=weight_decay,
         report_to=["tensorboard"],
         log_level="error",
         logging_dir=os.path.join(output, "logs"),
-        evaluation_strategy="steps" if ds_test is not None else "no",
+        eval_strategy="steps" if ds_test is not None else "no",
         eval_steps=eval_steps,
+        eval_on_start=True,
         load_best_model_at_end=ds_test is not None,
-        # dataloader_num_workers=ncpus
+        dataloader_num_workers=ncpus,
     )
 
+    tokenizer = _load_tokenizer(tokenizer, checkpoint)  # reload to stop warnings about forking
     data_collator = DataCollatorForSeq2Seq(
         tokenizer=tokenizer, 
+        model=model,
         padding=True,
     )
-
-    callbacks = []
-    if ds_test is not None and early_stopping is not None:
-        print_err(f"Setting early stopping patience to {early_stopping} evaluation steps")
-        callbacks.append(EarlyStoppingCallback(early_stopping_patience=early_stopping))
-    if plot_filename is not None:
-        print_err("No early stopping.")
-        callbacks.append(PlotterCallback(plot_filename))
-
+    
+    tokenizer = _load_tokenizer(tokenizer, checkpoint)  # reload to stop warnings about forking
     trainer = Seq2SeqTrainer(
         model=model,
         args=training_args,
         train_dataset=ds_train,
         eval_dataset=ds_test,
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
         data_collator=data_collator,
-        callbacks=callbacks,
     )
+    trainer.add_callback(SaveDatasetStateCallback(trainer, num_rows=n_training_rows))
+    if ds_test is not None and early_stopping is not None:
+        print_err(f"Setting early stopping patience to {early_stopping} evaluation steps")
+        trainer.add_callback(
+            EarlyStoppingCallback(early_stopping_patience=early_stopping)
+        )
+    else:
+        print_err("No early stopping.")
+    if plot_filename is not None:
+        trainer.add_callback(PlotterCallback(plot_filename))
 
     trainer.train()
     trainer.save_model(output)

@@ -39,8 +39,23 @@ def _check_columns(columns, dataset):
             raise KeyError(f"Columns missing from dataset: {', '.join(missing_from_data)}")
     return columns
 
-def _return_embedding(last_hidden, 
-                      method: str = 'mean'):
+def _return_embedding(
+    last_hidden, 
+    method: str = 'mean'
+):
+    """Aggregate LLM embedding along sequence dimension.
+
+    Examples
+    ========
+    >>> import torch
+    >>> emb = _return_embedding(torch.randn(2, 4, 8), method="mean")
+    >>> emb.shape == (2, 8)  # pooled to (B, H)
+    True
+    >>> emb_var = _return_embedding(torch.ones(1, 3, 4), method="var")
+    >>> torch.all(torch.isfinite(emb_var))  # no NaNs / infs
+    tensor(True)
+    
+    """
 
     if method == 'start':
         vals = last_hidden[:,0,:]
@@ -60,8 +75,7 @@ def _return_embedding(last_hidden,
     elif method == 'median':
         vals = torch.median(last_hidden, dim=1).values
     elif method == 'var':
-        vals = torch.log(torch.var(last_hidden, dim=1))
-        vals = torch.nan_to_num(vals, nan=0., posinf=0., neginf=0.)
+        vals = torch.var(last_hidden, dim=1)
     elif method == 'max':
         vals = torch.max(last_hidden, dim=1).values
     elif isinstance(method, int) and method >= 0 and method < last_hidden.shape[1]:
@@ -72,9 +86,23 @@ def _return_embedding(last_hidden,
     return vals.detach()
 
 
-def _tokenize_for_embedding(ds: Mapping,
-                            tokenizer, 
-                            column: str = 'smiles') -> Dict[str, ndarray]:
+def _tokenize_for_embedding(
+    ds: Mapping[str, Iterable],
+    tokenizer, 
+    column: str = 'smiles'
+) -> Dict[str, ndarray]:
+
+    """Tokenize strings before embedding with BART.
+
+    Examples
+    ========
+    >>> from transformers import AutoTokenizer
+    >>> tok = AutoTokenizer.from_pretrained("sshleifer/bart-tiny-random")
+    >>> toks = _tokenize_for_embedding({"smiles": ["CC"]}, tok)
+    >>> set(toks) == {"input_ids", "attention_mask"}  # correct keys
+    True
+
+    """
 
     smiles = cast(ds[column], to=list)
     smiles = [s if s is not None else '<unk>' for s in smiles]
@@ -88,11 +116,7 @@ def _tokenize_for_embedding(ds: Mapping,
                               return_tensors='pt', 
                               padding=True)
 
-    if torch.cuda.is_available():
-        device = 'cuda'
-    else:
-        device = 'cpu'
-
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     return {key: tokenized[key].to(device) for key in ['input_ids', 'attention_mask']}
 
     
@@ -107,18 +131,35 @@ def _embed_smiles(
     method = cast(method, to=list)
     ds_tokenized = _tokenize_for_embedding(ds, tokenizer=tokenizer, column=column)
     
-    model_args = {key: ds_tokenized[key] for key in ['input_ids', 'attention_mask']}
-    outputs = model(**model_args, 
-                    decoder_input_ids=model_args['input_ids'])
-    encoder_last_hidden_state = outputs['encoder_last_hidden_state'].detach()
+    tokenized_inputs = {key: ds_tokenized[key] for key in ['input_ids', 'attention_mask']}
+    model.eval()
+    with torch.no_grad():
+        outputs = model(
+            **tokenized_inputs, 
+            decoder_input_ids=tokenized_inputs['input_ids'],
+            output_hidden_states=True,
+            return_dict=True,
+        )
+    
+    enc_last = outputs.encoder_hidden_states[-1]
+    dec_last = outputs.decoder_hidden_states[-1]
         
     if len(method) == 1:
-        results = dict(embedding=_return_embedding(encoder_last_hidden_state, method=method[0]))
+        results = {
+            "embedding": np.concatenate([
+                _return_embedding(enc_last, method=method[0]),
+                _return_embedding(dec_last, method=method[0]),
+            ], axis=-1)
+        }
     else:
-        results = {f"embedding_{str(meth)}": _return_embedding(encoder_last_hidden_state, method=meth).to('cpu').numpy()
-                   for meth in method}
+        results = {
+            f"embedding_{str(meth)}": np.concatenate([
+                _return_embedding(enc_last, method=meth),
+                _return_embedding(dec_last, method=meth),
+            ], axis=-1) for meth in method
+        }
 
-    results.update(dict(smiles=ds[column]))
+    results.update({"smiles": ds[column]})
 
     return results
 
@@ -258,6 +299,11 @@ def _embedding_routine(df: Union[str, Iterable[str], DataFrame],
         model = AutoModelForSeq2SeqLM.from_pretrained(model)
     if torch.cuda.is_available():
         model = model.to('cuda')
+    model = torch.compile(
+        model, 
+        fullgraph=True,
+        mode="max-autotune",
+    )
 
     ds = read_dataset(df, column=column, meta_columns=additional_columns)
     additional_columns = _check_columns(additional_columns, ds)
@@ -265,15 +311,14 @@ def _embedding_routine(df: Union[str, Iterable[str], DataFrame],
     for item in ds.iter(batch_size=batch_size):
         smiles_values += item[column]
 
-    embedder = partial(
-        _embed_smiles, 
-        column=column, 
-        tokenizer=tokenizer,
-        model=model, 
-        method=method,
-    )
     embeddings = ds.map(
-        embedder, 
+        _embed_smiles, 
+        fn_kwargs={
+            "column": column, 
+            "tokenizer": tokenizer,
+            "model": model, 
+            "method": method,
+        },
         batched=True, 
         batch_size=batch_size, 
         desc="Calculating embedding",
@@ -337,13 +382,13 @@ def embed_smiles_files(
         additional_columns=additional_columns,
     )
 
-    flattener = partial(_flatten_embedding, 
-                        embedding_columns=embedding_columns)
-
     embeddings = (
         embeddings#.to_iterable_dataset()
         .map(
-            flattener,
+            _flatten_embedding,
+            fn_kwargs={
+                "embedding_columns": embedding_columns,
+            },
             remove_columns=embedding_columns,
             batched=True, 
             batch_size=batch_size,

@@ -1,18 +1,24 @@
 """Utilities for making large language chemical datasets."""
 
-from typing import Dict, Iterable, List, Mapping, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Mapping, Optional, Union
 
 from carabiner import print_err
 from datasets import Dataset, DatasetDict
 from pandas import DataFrame
 from schemist.converting import convert_string_representation
-from transformers import PreTrainedTokenizerFast
+
+if TYPE_CHECKING:
+    from transformers import PreTrainedTokenizerFast
+else:
+    PreTrainedTokenizerFast = Any
 from rdkit.Chem import MolFromSmiles, MolToSmiles
 
-def _prepare_data(x: Mapping[str, Iterable[str]],                   
-                  column: str,
-                  permuted_column: str,
-                  tokenizer: PreTrainedTokenizerFast) -> Dict[str, List[str]]:
+def _prepare_data(
+    x: Mapping[str, Iterable[str]],                   
+    column: str,
+    permuted_column: str,
+    tokenizer: PreTrainedTokenizerFast
+) -> Dict[str, List[str]]:
 
     inputs = tokenizer(x[permuted_column], 
                        return_special_tokens_mask=True, 
@@ -27,10 +33,27 @@ def _prepare_data(x: Mapping[str, Iterable[str]],
     return inputs
 
 
-def _random_smiles(column: str,
-                   tokenizer: PreTrainedTokenizerFast,
-                   permuted_column: Optional[str] = None,
-                   unknown_token: str = '<unk>'):
+def _random_smiles(
+    column: str,
+    tokenizer: PreTrainedTokenizerFast,
+    permuted_column: Optional[str] = None,
+    unknown_token: str = '<unk>'
+):
+    """Generate canonical and permuted SMILES.
+
+    Examples
+    ========
+    >>> from transformers import AutoTokenizer
+    >>> tok = AutoTokenizer.from_pretrained("sshleifer/bart-tiny-random")
+    >>> fn = _random_smiles(column="smiles", tokenizer=tok)
+    >>> batch = {"smiles": ["C12=C(C=CN2)C=CC=C1", "C12=C(C=CN2)C=CC=C1CCN"]}
+    >>> out = fn(batch)
+    >>> len(out["input_ids"]) == len(out["labels"]) == 2  # equal lengths
+    True
+    >>> out["labels"][0] != out["input_ids"][0]  # permutation happened
+    True
+    
+    """
 
     if permuted_column is None:
         permuted_column = f"permuted_{column}"
@@ -43,16 +66,20 @@ def _random_smiles(column: str,
 
     def random_smiles(x: Mapping[str, Iterable[str]]) -> Dict[str, List[str]]:
 
-        results = convert_string_representation(x[column], 
-                                                output_representation=['smiles', 'permuted_smiles'])
+        results = convert_string_representation(
+            x[column], 
+            output_representation=['smiles', 'permuted_smiles'],
+        )
 
         x[column] = list(map(_cleaner, results['smiles']))
         x[permuted_column] = list(map(_cleaner, results['permuted_smiles']))
 
-        return _prepare_data(x, 
-                             column=column, 
-                             permuted_column=permuted_column, 
-                             tokenizer=tokenizer)
+        return _prepare_data(
+            x, 
+            column=column, 
+            permuted_column=permuted_column, 
+            tokenizer=tokenizer,
+        )
 
     return random_smiles
 
