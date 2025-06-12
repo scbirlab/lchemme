@@ -1,4 +1,4 @@
-"""Command-line interface for lchemmy."""
+"""Command-line interface for lchemme."""
 
 from typing import Any, Dict, List, Optional
 
