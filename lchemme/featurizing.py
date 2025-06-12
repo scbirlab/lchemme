@@ -284,6 +284,12 @@ def _embedding_routine(df: Union[str, Iterable[str], DataFrame],
                        plot: Optional[str] = None,
                        additional_columns: Optional[Union[str, Iterable[str]]] = None) -> Dataset:
 
+    from torch._dynamo import config as dynamo_config
+    # suppress errors and tell Dynamo to skip all logger.* methods
+    dynamo_config.suppress_errors = True
+    dynamo_config.ignore_logger_methods += [
+        "warning_once", "warning", "info", "debug", "critical", "error"
+    ]
     from transformers import AutoModelForSeq2SeqLM
 
     method = cast(method, to=list)
