@@ -108,7 +108,7 @@ class SaveDatasetStateCallback(TrainerCallback):
             print_err(f"INFO: Saving eval data at {args.output_dir}")
             eval_out = self.__class__._eval_data_path(args.output_dir)
             if isinstance(eval_ds, Dataset):
-                train_ds.save_to_disk(train_out)
+                eval_ds.save_to_disk(train_out)
             else:
                 print_err(f"WARNING: Not saving eval dataset")
 
