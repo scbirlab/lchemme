@@ -75,13 +75,6 @@ def _pretrain(args: Namespace) -> None:
 @clicommand(message="Featurizing with the following parameters")
 def _featurize(args: Namespace) -> None:
 
-    from torch._dynamo import config as dynamo_config
-    # suppress errors and tell Dynamo to skip all logger.* methods
-    dynamo_config.suppress_errors = True
-    dynamo_config.ignore_logger_methods.update([
-        "warning_once", "warning", "info", "debug", "critical", "error"
-    ])
-
     from .featurizing import embed_smiles_files
 
     if args.tokenizer is None:
