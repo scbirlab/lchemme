@@ -284,6 +284,7 @@ def _embedding_routine(df: Union[str, Iterable[str], DataFrame],
                        plot: Optional[str] = None,
                        additional_columns: Optional[Union[str, Iterable[str]]] = None) -> Dataset:
 
+    
     from transformers import AutoModelForSeq2SeqLM
 
     method = cast(method, to=list)
@@ -299,11 +300,11 @@ def _embedding_routine(df: Union[str, Iterable[str], DataFrame],
         model = AutoModelForSeq2SeqLM.from_pretrained(model)
     if torch.cuda.is_available():
         model = model.to('cuda')
-    model = torch.compile(
-        model, 
-        fullgraph=True,
-        mode="max-autotune",
-    )
+    # model = torch.compile( # fails due to logger
+    #     model, 
+    #     fullgraph=True,
+    #     mode="max-autotune",
+    # )
 
     ds = read_dataset(df, column=column, meta_columns=additional_columns)
     additional_columns = _check_columns(additional_columns, ds)

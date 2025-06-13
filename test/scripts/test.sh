@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 
-set -e
-set -x
+set -xeuo pipefail
 
 TRAIN_DATA="hf://scbirlab/fang-2023-biogen-adme@scaffold-split:train"
 TEST_DATA="hf://scbirlab/fang-2023-biogen-adme@scaffold-split:test"

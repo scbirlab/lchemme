@@ -28,7 +28,8 @@ _DEFAULT_SEED = 0
 def _load_train_test(
     train: Union[str, Dataset, DatasetDict],
     column: Optional[str],
-    test: Optional[Union[str, Dataset, float]] = None
+    test: Optional[Union[str, Dataset, float]] = None,
+    seed: int = _DEFAULT_SEED
 ):
 
     from .io import read_dataset
@@ -63,7 +64,12 @@ def _load_train_test(
         test_n = ds_test.num_rows
         if test_n > max_test_examples:
             print_err(f"Test data contains {test_n} rows; downsampling to {max_test_examples}.")
-            ds_test = ds_test.shuffle(seed=1).take(max_test_examples)
+            ds_test = (
+                ds_test
+                .to_iterable_dataset(shards=256)
+                .shuffle(seed=seed, buffer_size=1024)
+                .take(max_test_examples)
+            )
 
     return ds_train, ds_test
 
@@ -208,12 +214,13 @@ def _load_new_dataset(
 
     def _filter_fn(x):
         return x[column] is not None and x[column] != ""
+
     ds_train = (
         ds_train
-        .filter(_filter_fn)
         .to_iterable_dataset(
-            num_shards=256,
+            num_shards=1024,
         )
+        .filter(_filter_fn)
         .shuffle(
             seed=seed, 
             buffer_size=1024,
@@ -228,9 +235,6 @@ def _load_new_dataset(
         ds_test = (
             ds_test
             .filter(_filter_fn)
-            .to_iterable_dataset(
-                num_shards=256,
-            )
             .map(
                 permutation_function, 
                 batched=True, 
@@ -316,6 +320,7 @@ def pretrain(
     else:
         print_err(f"Loading pretrained model from {checkpoint}")
         model = AutoModelForSeq2SeqLM.from_pretrained(checkpoint)
+    model.gradient_checkpointing_enable()
     print_err(f"Loaded model from {checkpoint}; it has {model.num_parameters()} parameters")
 
     if not resume_training:
@@ -338,7 +343,6 @@ def pretrain(
     print_err(f"Training will have {n_epochs:.2f} epochs")
 
     ncpus = min(4, multiprocessing.cpu_count() - 1)  # TODO: This doesn't seem to work well on Crick Slurm cluster
-    
     
     steps_per_epoch = _get_steps_per_epoch(n_training_rows, batch_size)
     max_training_steps = ceil(n_epochs * n_training_rows / batch_size)
